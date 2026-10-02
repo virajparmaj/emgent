@@ -1,0 +1,60 @@
+# Personal research data and generated run history
+/runs/
+/.firecrawl/
+/jobs.db
+/jobs.db-*
+/jobs.sqlite
+/jobs.sqlite-*
+/jobs.csv
+/SEARCH_POLICY.md
+/AGENTS.md
+/README.md
+
+# Resumes, cover letters, application material, and exports
+*.pdf
+*.doc
+*.docx
+*.odt
+*.rtf
+*.pages
+*.xlsx
+*.xls
+*.csv
+*.tsv
+
+# Credentials, tokens, cookies, and local configuration
+.env
+.env.*
+!.env.example
+*.pem
+*.key
+*.p12
+*.pfx
+cookies.json
+auth.json
+credentials.json
+
+# Local agent and editor state
+/.codex/
+/.agents/
+.idea/
+.vscode/
+*.swp
+*.swo
+*~
+
+# Python environments and caches
+.venv/
+venv/
+env/
+__pycache__/
+*.py[cod]
+.pytest_cache/
+.mypy_cache/
+.ruff_cache/
+.coverage
+htmlcov/
+
+# Operating-system files
+.DS_Store
+Thumbs.db
