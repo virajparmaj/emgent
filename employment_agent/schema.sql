@@ -15,6 +15,13 @@ CREATE TABLE IF NOT EXISTS jobs (
     job_url TEXT NOT NULL,
     canonical_url TEXT NOT NULL UNIQUE,
     ats_source TEXT,
+    source_type TEXT CHECK (source_type IS NULL OR source_type IN (
+        'COMPANY_CAREERS', 'GREENHOUSE', 'LEVER', 'ASHBY', 'WORKDAY',
+        'SUCCESSFACTORS', 'AGGREGATOR', 'OTHER'
+    )),
+    source_detail TEXT,
+    company_archetype TEXT,
+    diversity_exception TEXT,
     job_id TEXT,
     date_posted TEXT,
     date_discovered TEXT NOT NULL,
@@ -46,6 +53,7 @@ CREATE TABLE IF NOT EXISTS jobs (
     verified_at TEXT,
     open_evidence TEXT,
     source_file TEXT,
+    evidence_digest_file TEXT,
     score_breakdown TEXT NOT NULL,
     score_explanation TEXT NOT NULL,
     normalized_title TEXT NOT NULL,
@@ -56,3 +64,21 @@ CREATE TABLE IF NOT EXISTS jobs (
 -- ATS IDs are unique within an employer; unrelated companies can reuse numeric IDs.
 CREATE UNIQUE INDEX IF NOT EXISTS jobs_company_job_id
 ON jobs(company COLLATE NOCASE, job_id) WHERE job_id IS NOT NULL;
+
+CREATE TABLE IF NOT EXISTS review_events (
+    id INTEGER PRIMARY KEY,
+    job_id INTEGER NOT NULL REFERENCES jobs(id) ON DELETE CASCADE,
+    status TEXT NOT NULL CHECK (status IN (
+        'new', 'review', 'apply', 'applied', 'interview', 'rejected', 'closed', 'skip'
+    )),
+    reason_code TEXT CHECK (reason_code IS NULL OR reason_code IN (
+        'GREAT_FIT', 'TOO_SENIOR', 'WRONG_LOCATION', 'TOO_ENGINEERING_HEAVY',
+        'WEAK_DOMAIN_FIT', 'MISSING_REQUIRED_SKILLS', 'STALE_OR_CLOSED',
+        'COMPANY_NOT_INTERESTING', 'DUPLICATE', 'OTHER'
+    )),
+    note TEXT,
+    created_at TEXT NOT NULL
+);
+
+CREATE INDEX IF NOT EXISTS review_events_job_id_created_at
+ON review_events(job_id, created_at DESC, id DESC);

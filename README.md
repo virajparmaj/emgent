@@ -46,9 +46,9 @@ exclusions. `jobs.db` remains the deduplicated master tracker across all runs.
 
 | File | Purpose |
 |---|---|
-| `schema.sql` | One-table SQLite schema, field constraints, and duplicate keys |
-| `jobs.py` | Validates, scores, imports, exports, and updates review status |
-| `run_manager.py` | Creates standard run folders and finalizes run snapshots |
+| `employment_agent/` | Organized Python package containing the CLI, schema, validation, run management, and workflow engine |
+| `research.py` | Small compatibility launcher for the package CLI |
+| `tests/` | Offline standard-library tests using temporary databases and mocked commands |
 | `.gitignore` | Keeps personal research data and credentials out of Git |
 
 The implementation uses only the Python standard library.
@@ -74,8 +74,8 @@ firecrawl login --browser
 Restart Codex after installing skills, then verify the session:
 
 ```bash
+firecrawl --version
 firecrawl --status
-firecrawl search "site:example.com careers data analyst" --limit 3
 ```
 
 Authentication can also use `FIRECRAWL_API_KEY`, stored outside the repository. Never commit
@@ -85,132 +85,186 @@ API keys, login state, cookies, or raw application material.
 
 ```bash
 python3 -m venv .venv
-.venv/bin/python jobs.py init
+.venv/bin/python -m employment_agent.jobs init
 ```
 
 This creates the ignored local `jobs.db`. SQL `NULL` is used for facts that a source does not
 explicitly provide; the workflow does not guess salary, posting date, experience, sponsorship,
 or work-authorization requirements.
 
-## Start a research run
+## Terminal workflow
 
-```bash
-.venv/bin/python run_manager.py new \
-  --date 2026-10-02 \
-  --scope "Focused US analytics search" \
-  --target-count 10
+The supported workflow is:
+
+```text
+plan → discover → triage → verify → finalize → review
 ```
 
-The command creates:
+`discover` and `verify` are dry-run commands by default. They write reviewable request plans
+but cannot call Firecrawl unless `--execute` is supplied explicitly. Creating a plan or a dry
+run does not authorize execution; only use `--execute` as part of a separately authorized
+research run.
+
+### 1. Plan
+
+```bash
+.venv/bin/python research.py plan \
+  --date 2026-10-02 \
+  --scope "Focused US analytics search" \
+  --target-count 10 \
+  --focus "credit risk analytics" \
+  --locations "Chicago" \
+  --locations "Remote US"
+```
+
+The current policy rejects targets above ten. Daily focus, locations, include/exclude company
+lists, freshness preference, company cap, secondary-track allocation, cache age, stopping rule,
+and operation budgets are stored in `plan.json`; they do not rewrite `SEARCH_POLICY.md`.
+
+Default ten-job budgets are 20 searches, 30 scrapes, 4 maps, 2 crawls, and 2 read-only
+interactions. These are local call ceilings, not estimates of Firecrawl pricing or credits.
+
+The command creates a run layout like:
 
 ```text
 runs/YYYY-MM-DD-run-NNN/
 ├── README.md                 # plan, results, and verification notes
+├── plan.json                 # reviewed daily preferences and hard budgets
 ├── run.json                  # scope, status, counts, and timestamps
 ├── jobs.json                 # reviewed structured records
 ├── jobs.csv                  # generated final snapshot
+├── candidates.json           # local triage ledger and discovery provenance
+├── verification-plan.json    # progressive, read-only verification requests
+├── usage.jsonl               # planned/attempted/success/failed/cache events
+├── coverage.json             # run and rolling-master diversity report
+├── manifest.json             # hashes, sizes, counts, and local tool versions
 ├── discovery/                # Firecrawl search and map results
 ├── evidence/                 # sources supporting selected jobs
+├── evidence-digests/         # compact, provenance-tagged extraction summaries
 └── reviewed-not-selected/    # investigated exclusions
 ```
 
-## Firecrawl research workflow
+### 2. Discover
 
-### 1. Discover a focused candidate set
-
-Search by responsibility, industry, location, company, and ATS. Keep the result set small
-enough to review carefully.
+Prepare the balanced query matrix without making a request:
 
 ```bash
-firecrawl search \
-  "credit risk analytics Python SQL early career United States jobs" \
-  --limit 10 --json \
-  -o runs/2026-10-02-run-001/discovery/credit-risk.json
+.venv/bin/python research.py discover runs/2026-10-02-run-001
 ```
 
-A search result is only a lead. It does not prove that the role is open or that its snippet is
-current.
-
-### 2. Scrape the canonical posting
-
-Prefer the company careers site or its official ATS posting. Scrape every shortlisted role.
+After reviewing `discovery/request-plan.json`, a separately authorized run can execute it:
 
 ```bash
-firecrawl scrape "https://company.example/careers/job-id" \
-  --only-main-content --json \
-  -o runs/2026-10-02-run-001/evidence/company-role.json
+.venv/bin/python research.py discover runs/2026-10-02-run-001 --execute
 ```
 
-Confirm that the saved page matches the company, title, location, and responsibilities. Look
-for closure messages, generic-careers redirects, and a live job-specific application path.
-Merely receiving HTTP 200 is insufficient evidence that a job is open.
+The query plan rotates role concepts, locations, company archetypes, ATS domains, broad
+company-independent discovery, and a limited company-specific portion. Equivalent requests
+share a SHA-256 fingerprint. An identical successful request can be reused only within the
+same run and cache-age window. Four consecutive zero-yield searches stop execution by default.
 
-### 3. Map or crawl only when needed
+Every operation writes accounting events with its fingerprint, timing, result/page count,
+output, reported credits when the CLI supplies them, and failure category. Local budgets are
+enforced even when credit data is absent. Search results remain unverified discovery leads.
 
-Use Map to locate relevant pages on a known careers site:
+### 3. Triage
 
 ```bash
-firecrawl map "https://company.example/careers" \
-  --search "risk analytics" --json --pretty \
-  -o runs/2026-10-02-run-001/discovery/company-risk-urls.json
+.venv/bin/python research.py triage runs/2026-10-02-run-001
 ```
 
-Use Crawl for a narrow careers section when several linked pages must be inspected:
+Triage normalizes and deduplicates URLs before any verification scrape, merges discovery
+provenance, marks URLs already in the master database, and records retain/reject reasons.
+Aggregator results are held for canonical-URL resolution and are not treated as canonical
+evidence. Snippets never establish openness, posting facts, or a verified fit score.
+
+### 4. Verify
+
+Prepare the progressive verification plan without making a request:
 
 ```bash
-firecrawl crawl "https://company.example/careers" \
-  --include-paths /careers/jobs \
-  --limit 25 --max-depth 2 --wait --pretty \
-  -o runs/2026-10-02-run-001/discovery/company-careers.json
+.venv/bin/python research.py verify runs/2026-10-02-run-001
 ```
 
-Start with Search and Scrape. Use Interact only when required content needs a click or other
-page interaction and ordinary scraping cannot retrieve it. This project never fills or submits
-application forms.
+For an authorized execution:
 
-### 4. Review and structure the records
+```bash
+.venv/bin/python research.py verify runs/2026-10-02-run-001 --execute
+```
 
-Add selected jobs to the run's `jobs.json`. Each record keeps factual fields, canonical URL,
-availability evidence, fit-score components, concerns, and a project-relative `source_file`
-inside that run's `evidence/` directory.
+Verification escalates only as needed: main-content markdown and links, then additional
+metadata/raw HTML, narrow Map, path-limited Crawl, and finally a fixed read-only Interact DOM
+inspection. The command builder has no form-fill, click, login, account, upload, or submission
+operation. Canonical responses go directly into the run rather than a second permanent
+`.firecrawl` copy.
 
-Deduplication uses these identities:
+Each shortlisted source retains its complete canonical response. A separate compact digest
+records source facts, calculated values, reviewer judgments, and true unknowns independently,
+with evidence pointers and the canonical file's SHA-256. Digests reduce repeated context; they
+never replace or discard canonical evidence.
+
+### 5. Finalize
+
+```bash
+.venv/bin/python research.py finalize runs/2026-10-02-run-001 --expected-count 10
+```
+
+Finalization validates and stages everything before replacing persistent outputs. It rejects
+completed runs, wrong counts, within-run duplicates, conflicting master identities, unsafe or
+missing evidence, inconsistent derived scores, and future dates. Deduplication uses:
 
 1. Canonical URL
 2. Company plus employer-scoped job ID
 3. Company plus normalized title and location
 
-Official postings replace aggregator discoveries when both describe the same job.
+Evidence must be a regular, non-symlink file below the current run's `evidence/` directory.
+The import occurs in a temporary database copy, passes SQLite integrity and unique-export-count
+checks, and then promotes the database, CSVs, coverage, metadata, and manifest with rollback on
+promotion failure. Existing user-review statuses are preserved. Official sources supersede
+aggregators, never the reverse.
 
-### 5. Finalize the run
+`coverage.json` reports company concentration, role family, geography, freshness, explicit
+company archetype, and primary/secondary tracks for the run and rolling master. Concentration
+thresholds produce warnings; they never silently replace a stronger selected job.
 
-```bash
-.venv/bin/python run_manager.py finalize \
-  runs/2026-10-02-run-001 \
-  --expected-count 10
-```
+### 6. Review
 
-Finalization:
-
-- requires every selected record to reference saved evidence inside its run;
-- validates fields, score components, dates, status values, and URLs;
-- imports or updates deduplicated records in `jobs.db`;
-- preserves existing user-review statuses;
-- refreshes the private master `jobs.csv`;
-- writes the run-specific CSV and updates the local run index.
-
-## Review statuses
-
-Records support `new`, `review`, `apply`, `applied`, `interview`, `rejected`, `closed`, and
-`skip`. Update a record using its local SQLite ID:
+Review is plain terminal output and never visits a posting:
 
 ```bash
-.venv/bin/python jobs.py status --job-id 1 --status review
-.venv/bin/python jobs.py export
+.venv/bin/python research.py review list
+.venv/bin/python research.py review show --job-id 1
+.venv/bin/python research.py review set --job-id 1 --status review --reason GREAT_FIT
+.venv/bin/python research.py review feedback
 ```
 
-The status command changes only the review label. It does not visit a website or perform an
-external action.
+Review events are append-only feedback records separate from factual availability. Feedback
+summaries can propose the next query mix, but cannot silently alter permanent preferences or
+scoring weights.
+
+## Deterministic policy and migration
+
+The importer calculates freshness, recency points, neutral company points, geography points,
+total score, and fit category. Only statistics/ML, finance/risk, seniority, and technical-fit
+components remain explicit reviewer judgments. Missing or null derived fields are supported for
+legacy records; supplied inconsistent values are rejected.
+
+Schema migration is idempotent and additive. It adds controlled `source_type`, optional source
+detail/archetype/digest fields, and review events without backfilling old source strings or
+rewriting historical runs.
+
+## Tests
+
+All tests are offline and use temporary run roots, temporary SQLite databases, fixture
+responses, and injected command runners:
+
+```bash
+python3 -m unittest discover -s tests -v
+python3 -m compileall -q employment_agent research.py tests
+```
+
+The suite never runs a Firecrawl network operation and never touches the private `jobs.db`,
+`jobs.csv`, `.firecrawl/`, or existing `runs/` history.
 
 ## Privacy model
 
